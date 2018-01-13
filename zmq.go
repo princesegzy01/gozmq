@@ -6,8 +6,12 @@ package gozmq
 
 import (
 	"errors"
+	"fmt"
 	"io"
 	"net"
+	"os"
+	"regexp"
+	"strings"
 	"time"
 )
 
@@ -271,6 +275,32 @@ func subscribe(w io.Writer, prefix string) error {
 	return writeMessage(w, [][]byte{msg})
 }
 
+func connFromAddr(addr string) (net.Conn, error) {
+	re, err := regexp.Compile(`((tcp|unix|ipc)://)?([^:]+):?(\d*)`)
+	if err != nil {
+		return nil, err
+	}
+
+	submatch := re.FindStringSubmatch(addr)
+
+	if addrs, err := net.LookupIP(submatch[3]); (err == nil &&
+		len(addrs) > 0) || submatch[2] == "tcp" ||
+		net.ParseIP(submatch[3]) != nil || submatch[4] != "" {
+
+		// We have a TCP address.
+		return net.DialTimeout("tcp", strings.Replace(submatch[3], "*",
+			"", 1)+":"+submatch[4], time.Minute)
+
+	} else if _, err := os.Stat(submatch[3]); err == nil ||
+		submatch[2] == "unix" || submatch[2] == "ipc" {
+
+		// We have a  UNIX socket.
+		return net.DialTimeout("unix", submatch[3], time.Minute)
+	}
+
+	return nil, fmt.Errorf("couldn't resolve address %s", addr)
+}
+
 // Conn is a connection to a ZMQ server.
 type Conn struct {
 	conn    net.Conn
@@ -279,7 +309,7 @@ type Conn struct {
 
 // Subscribe connects to a publisher server and subscribes to the given topics.
 func Subscribe(addr string, topics []string, timeout time.Duration) (*Conn, error) {
-	conn, err := net.DialTimeout("tcp", addr, time.Minute)
+	conn, err := connFromAddr(addr)
 	if err != nil {
 		return nil, err
 	}
