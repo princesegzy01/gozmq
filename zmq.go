@@ -273,11 +273,12 @@ func subscribe(w io.Writer, prefix string) error {
 
 // Conn is a connection to a ZMQ server.
 type Conn struct {
-	conn net.Conn
+	conn    net.Conn
+	timeout time.Duration
 }
 
 // Subscribe connects to a publisher server and subscribes to the given topics.
-func Subscribe(addr string, topics []string) (*Conn, error) {
+func Subscribe(addr string, topics []string, timeout time.Duration) (*Conn, error) {
 	conn, err := net.DialTimeout("tcp", addr, time.Minute)
 	if err != nil {
 		return nil, err
@@ -312,12 +313,13 @@ func Subscribe(addr string, topics []string) (*Conn, error) {
 
 	conn.SetDeadline(time.Time{})
 
-	return &Conn{conn}, nil
+	return &Conn{conn, timeout}, nil
 }
 
 // Receive a message from the publisher. It blocks until a new message is
 // received.
 func (c *Conn) Receive() ([][]byte, error) {
+	c.conn.SetReadDeadline(time.Now().Add(c.timeout))
 	return readMessage(c.conn)
 }
 
