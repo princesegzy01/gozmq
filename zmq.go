@@ -22,7 +22,7 @@ var (
 )
 
 func connFromAddr(addr string) (net.Conn, error) {
-	re, err := regexp.Compile(`((tcp|unix|ipc)://)?([^:]+):?(\d*)`)
+	re, err := regexp.Compile(`((tcp|unix|ipc)://)?([^:]*):?(\d*)`)
 	if err != nil {
 		return nil, err
 	}
@@ -40,7 +40,7 @@ func connFromAddr(addr string) (net.Conn, error) {
 	} else if _, err := os.Stat(submatch[3]); err == nil ||
 		submatch[2] == "unix" || submatch[2] == "ipc" {
 
-		// We have a  UNIX socket.
+		// We have a UNIX socket.
 		return net.DialTimeout("unix", submatch[3], time.Minute)
 	}
 
