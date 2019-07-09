@@ -455,3 +455,8 @@ func (c *Conn) Close() error {
 	})
 	return err
 }
+
+// RemoteAddr returns the remote network address.
+func (c *Conn) RemoteAddr() net.Addr {
+	return c.conn.RemoteAddr()
+}
