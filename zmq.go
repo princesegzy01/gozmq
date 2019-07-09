@@ -12,6 +12,7 @@ import (
 	"os"
 	"regexp"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -64,6 +65,9 @@ type Conn struct {
 	conn    net.Conn
 	topics  []string
 	timeout time.Duration
+
+	closeConn sync.Once
+	quit      chan struct{}
 }
 
 func (c *Conn) writeAll(buf []byte) error {
@@ -362,7 +366,12 @@ func Subscribe(addr string, topics []string, timeout time.Duration) (*Conn, erro
 
 	conn.SetDeadline(time.Now().Add(10 * time.Second))
 
-	c := &Conn{conn, topics, timeout}
+	c := &Conn{
+		conn:    conn,
+		topics:  topics,
+		timeout: timeout,
+		quit:    make(chan struct{}),
+	}
 
 	if err := c.writeGreeting(); err != nil {
 		conn.Close()
@@ -396,16 +405,27 @@ func Subscribe(addr string, topics []string, timeout time.Duration) (*Conn, erro
 }
 
 // Receive a message from the publisher. It blocks until a new message is
-// received.
+// received. If the connection times out and it was not explicitly terminated,
+// then a timeout error is returned. Otherwise, if it was explicitly terminated,
+// then io.EOF is returned.
 func (c *Conn) Receive() ([][]byte, error) {
 	messages, err := c.readMessage()
 	// If the error is either nil or a non-EOF error, we return it as-is.
 	if err != io.EOF {
 		return messages, err
 	}
-	// We got an EOF, so our socket is disconnected. We attempt to
-	// reconnect. If successful, replace the existing connection with the
-	// new one. Either way, return a timeout error.
+
+	// We got an EOF, so our socket is disconnected. If the connection was
+	// explicitly terminated, we'll return the EOF error.
+	select {
+	case <-c.quit:
+		return nil, io.EOF
+	default:
+	}
+
+	// Otherwise, we'll attempt to reconnect. If successful, we'll replace
+	// the existing connection with the new one. Either way, return a
+	// timeout error.
 	errTimeout := &net.OpError{
 		Op:     "read",
 		Net:    c.conn.LocalAddr().Network(),
@@ -413,19 +433,25 @@ func (c *Conn) Receive() ([][]byte, error) {
 		Addr:   c.conn.RemoteAddr(),
 		Err:    &reconnectError{err},
 	}
-	newConn, err := Subscribe(c.conn.RemoteAddr().String(), c.topics,
-		c.timeout)
+	newConn, err := Subscribe(
+		c.conn.RemoteAddr().String(), c.topics, c.timeout,
+	)
 	if err != nil {
 		// Prevent CPU overuse by refused reconnection attempts.
 		time.Sleep(c.timeout)
 	} else {
-		c.Close()
-		*c = *newConn
+		c.conn.Close()
+		c.conn = newConn.conn
 	}
 	return nil, errTimeout
 }
 
 // Close the underlying connection. Any further operations will fail.
 func (c *Conn) Close() error {
-	return c.conn.Close()
+	var err error
+	c.closeConn.Do(func() {
+		close(c.quit)
+		err = c.conn.Close()
+	})
+	return err
 }
