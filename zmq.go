@@ -193,7 +193,7 @@ func (c *Conn) subscribe(prefix string) error {
 }
 
 func (c *Conn) readCommand() (string, []byte, error) {
-	flag, buf, err := c.readFrame()
+	flag, buf, err := c.readFrame(true)
 	if err != nil {
 		return "", nil, err
 	}
@@ -256,10 +256,20 @@ func (c *Conn) readReady() error {
 }
 
 // Read a frame from the socket, setting deadline before each read to prevent
-// timeouts during or between frames.
-func (c *Conn) readFrame() (byte, []byte, error) {
+// timeouts during or between frames. The initialFrame should be used to denote
+// whether this is the first frame we'll read for a _new_ message.
+//
+// NOTE: This is a blocking call if there is nothing to read from the
+// connection.
+func (c *Conn) readFrame(initialFrame bool) (byte, []byte, error) {
+	// We'll only set a read deadline if this is not the first frame of a
+	// message. We do this to ensure we receive complete messages in a
+	// timely manner.
+	if !initialFrame {
+		c.conn.SetReadDeadline(time.Now().Add(c.timeout))
+	}
+
 	var flagBuf [1]byte
-	c.conn.SetReadDeadline(time.Now().Add(c.timeout))
 	if _, err := io.ReadFull(c.conn, flagBuf[:1]); err != nil {
 		return 0, nil, err
 	}
@@ -305,11 +315,22 @@ func (c *Conn) readFrame() (byte, []byte, error) {
 	return flag, buf, nil
 }
 
-// Read a message from the socket.
+// readMessage reads a new message from the connection.
+//
+// NOTE: This is a blocking call if there is nothing to read from the
+// connection.
 func (c *Conn) readMessage() ([][]byte, error) {
+	// We'll only set read deadlines on the underlying connection when
+	// reading messages of multiple frames after the first frame has been
+	// read. This is done to ensure we receive all of the frames of a
+	// message within a reasonable time frame. When reading the first frame,
+	// we want to avoid setting them as we don't know when a new message
+	// will be available for us to read.
+	initialFrame := true
+
 	var parts [][]byte
 	for {
-		flag, buf, err := c.readFrame()
+		flag, buf, err := c.readFrame(initialFrame)
 		if err != nil {
 			return nil, err
 		}
@@ -326,6 +347,8 @@ func (c *Conn) readMessage() ([][]byte, error) {
 		if len(parts) > 16 {
 			return nil, errors.New("message has too many parts")
 		}
+
+		initialFrame = false
 	}
 	return parts, nil
 }
