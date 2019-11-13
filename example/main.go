@@ -16,7 +16,7 @@ func main() {
 	}
 
 	for {
-		msg, err := c.Receive()
+		msg, err := c.Receive(nil)
 		if err != nil {
 			switch e := err.(type) {
 			case net.Error:
