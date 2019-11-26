@@ -105,7 +105,7 @@ func (c *Conn) writeGreeting() error {
 
 func (c *Conn) readGreeting() error {
 	greet := make([]byte, 64)
-	if _, err := io.ReadFull(c.conn, greet); err != nil {
+	if err := c.readFull(greet); err != nil {
 		return err
 	}
 
@@ -281,7 +281,7 @@ func (c *Conn) readFrame(buf []byte, initialFrame bool) (byte, []byte, error) {
 	}
 
 	var flagBuf [1]byte
-	if _, err := io.ReadFull(c.conn, flagBuf[:1]); err != nil {
+	if err := c.readFull(flagBuf[:1]); err != nil {
 		return 0, nil, err
 	}
 
@@ -296,7 +296,7 @@ func (c *Conn) readFrame(buf []byte, initialFrame bool) (byte, []byte, error) {
 		// Long form
 		var sizeBuf [8]byte
 		c.conn.SetReadDeadline(time.Now().Add(c.timeout))
-		if _, err := io.ReadFull(c.conn, sizeBuf[:8]); err != nil {
+		if err := c.readFull(sizeBuf[:8]); err != nil {
 			return 0, nil, err
 		}
 		for _, b := range sizeBuf {
@@ -306,7 +306,7 @@ func (c *Conn) readFrame(buf []byte, initialFrame bool) (byte, []byte, error) {
 		// Short form
 		var sizeBuf [1]byte
 		c.conn.SetReadDeadline(time.Now().Add(c.timeout))
-		if _, err := io.ReadFull(c.conn, sizeBuf[:1]); err != nil {
+		if err := c.readFull(sizeBuf[:1]); err != nil {
 			return 0, nil, err
 		}
 		size = uint64(sizeBuf[0])
@@ -327,11 +327,39 @@ func (c *Conn) readFrame(buf []byte, initialFrame bool) (byte, []byte, error) {
 
 	// Prevent timeout during large data read in case of slow connection.
 	c.conn.SetReadDeadline(time.Time{})
-	if _, err := io.ReadFull(c.conn, buf[:size]); err != nil {
+	if err := c.readFull(buf[:size]); err != nil {
 		return 0, nil, err
 	}
 
 	return flag, buf[:size], nil
+}
+
+func (c *Conn) readFull(buf []byte) error {
+	var (
+		size = len(buf)
+		n    int
+		err  error
+	)
+
+	for n < size && err == nil {
+		var nn int
+		if conn, ok := c.conn.(*net.TCPConn); ok {
+			nn, err = conn.Read(buf[n:])
+		}
+		if conn, ok := c.conn.(*net.UnixConn); ok {
+			nn, err = conn.Read(buf[n:])
+		}
+		n += nn
+	}
+
+	switch {
+	case n == size:
+		return nil
+	case n > 0 && err == io.EOF:
+		return io.ErrUnexpectedEOF
+	default:
+		return err
+	}
 }
 
 // readMessage reads a new message from the connection. Messages can be composed
